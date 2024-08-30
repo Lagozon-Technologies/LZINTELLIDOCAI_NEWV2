@@ -118,7 +118,7 @@ Pygments==2.18.0
 PyPika==0.48.9
 pyproject_hooks==1.1.0
 pyreadline3==3.4.1
-#pysqlite3-binary
+pysqlite3-binary
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 python-multipart==0.0.9
@@ -169,7 +169,7 @@ wrapt==1.16.0
 yarl==1.9.4
 zipp==3.19.2
 pytesseract
-unstructured
+# unstructured
 unstructured[all-docs]   
 llama-index-embeddings-openai==0.1.10
 llama-index-llms-openai==0.1.24
