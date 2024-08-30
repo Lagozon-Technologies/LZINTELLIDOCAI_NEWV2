@@ -3,13 +3,13 @@
 set -e  # Exit immediately if a command exits with a non-zero status
 
 # Create a directory in /home for custom installations
-mkdir -p /home/site/custom
+#mkdir -p /home/site/custom
 
 # Change to the custom directory
-cd /home/site/custom
+#cd /home/site/custom
 
 # Export the PATH to include the custom directory
-echo 'export PATH=$PATH:/home/site/custom' >> ~/.bashrc
+#echo 'export PATH=$PATH:/home/site/custom' >> ~/.bashrc
 
 # Function to check if a command is available
 # command_exists() {
@@ -89,4 +89,4 @@ done
 # export PYTHONPATH=$PYTHONUSERBASE/lib/python$PYTHON_VERSION/site-packages:$PYTHONPATH
 
 # Start the Flask app
-streamlit run new_main.py --server.port 8000 --server.address 0.0.0.0
+python -m streamlit run new_main.py --server.port 8000 --server.address 0.0.0.0
