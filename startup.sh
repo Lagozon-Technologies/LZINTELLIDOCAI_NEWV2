@@ -89,4 +89,4 @@ done
 # export PYTHONPATH=$PYTHONUSERBASE/lib/python$PYTHON_VERSION/site-packages:$PYTHONPATH
 
 # Start the Flask app
-gunicorn --bind=0.0.0.0 --timeout 1800 app:app
+streamlit run newmain.py --server.port 8000 --server.address 0.0.0.0
