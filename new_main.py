@@ -11,12 +11,14 @@
 # 02             23-Jul-2024   Satya          Config file and path variables is set
 # 03             01-Aug-2024   Satya          Package issue resolved -Deployed over Azure
 # 04             17-Aug-2024   Satya          Hybrid Retriver 
+# 05             22-Aug-2024   Satya          Addition of more department and role with change in font
+# 06             30-Aug-2024   Satya          Addition of unstructured.io and conversatinal chat with new UI
 # ********************************************************************************************** #
 
 #Added by Aruna for chromaDB SQLite version error
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+# __import__('pysqlite3')
+# import sys
+# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import streamlit as st
 import os
@@ -46,6 +48,7 @@ from datetime import datetime
 import pandas as pd
 import openai
 
+import textwrap
 
 
 load_dotenv()
@@ -91,7 +94,7 @@ Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
 CSV_FILE_PATH = "record_results.csv"
 
 # Function to append a row to the CSV file
-def append_to_csv(database, question, context_str, response, metadata):
+def append_to_csv(database, question, context_str, response, metadata="No Metadata"):
     # Check if CSV exists and create a DataFrame
     if os.path.exists(CSV_FILE_PATH):
         df = pd.read_csv(CSV_FILE_PATH)
@@ -161,18 +164,17 @@ def main():
     if tabs == "**User**":
         # Show sidebar in Tab 1
         with st.sidebar:
-            st.subheader(UPLOAD_DOC)
-            llm = HuggingFaceInferenceAPI(model_name=MODEL_NAME, token=HF_TOKEN)
+            st.subheader("**Upload your temporary document**")
             embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
             # Define options without Markdown syntax
-            parser_options = ['LlamaParse', 'Unstructured.io']
+            parser_options = [ 'LlamaParse','Unstructured.io']
 
             # Create a selectbox for parser choice
             parser_temp_choice = st.selectbox("Choose a parser:", parser_options,key="temp_select")
 
             # Display the selected parser in bold
             st.markdown(f"**Selected Parser:** {parser_temp_choice}")
-            uploaded_files = st.file_uploader("**Choose PDF files**", type=["pdf", "csv", "xlsx", "docx", "pptx"], accept_multiple_files=True)
+            uploaded_files = st.file_uploader("**Choose your files**", type=["pdf", "csv", "xlsx", "docx", "pptx"], accept_multiple_files=True)
 
             # Function to parse files and create the index
             def initialize_index(uploaded_files, embed_model):
@@ -197,6 +199,7 @@ def main():
                 # Create the index from the chunked documents
                 temp_index = VectorStoreIndex.from_documents(temp_documents, embed_model=embed_model)
                 return temp_index
+
             
             if uploaded_files:
                 # Check if the index is already initialized
@@ -204,70 +207,12 @@ def main():
                     if uploaded_files:
                         # Initialize the index and store it in session state
                         st.session_state.temp_index = initialize_index(uploaded_files, embed_model)
+            else:
+                # Clear the temp_index when documents are removed
+                if "temp_index" in st.session_state:
+                    del st.session_state["temp_index"]            
 
-                # Retrieve the index from session state
-                temp_index = st.session_state.temp_index
-
-                # Set up a prompt template for the question-answering task
-                qa_prompt_str_temp = (
-                    "Context information is below.\n"
-                    "---------------------\n"
-                    "{context_str}\n"
-                    "---------------------\n"
-                    "Given the context information and not prior knowledge, "
-                    "answer the question: {query_str}\n"
-                )
-
-                # Set up a retriever to get relevant nodes
-                retriever = temp_index.as_retriever(similarity_top_k=3)
-
-                # Option to select between text input or voice input
-                input_option = st.radio("**How would you like to ask your question?**", ('**Text**', '**Voice**'))
-
-                if input_option == '**Text**':
-                    st.text_input(ASK_QUESTION, key="temp_question")
-
-                else:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.write("**Convert speech to text:**")
-                    with c2:
-                        speech_to_text(language='en', use_container_width=True, just_once=True, key='STT', callback=callback)
-                    temp_question = st.session_state.get("temp_question", "")
-                    # Display the question
-                    if temp_question:
-                        st.write("**You asked:**", temp_question)
-
-                if st.button(ASK, key="temp_ask"):
-                    question_temp = st.session_state.get("temp_question", "")
-                    if question_temp:
-                        # Retrieve nodes relevant to the question
-                        retrieved_nodes = retriever.retrieve(question_temp)
-                        context_str = "\n\n".join([r.get_content()[:4000] for r in retrieved_nodes])
-
-                        # Format the QA prompt
-                        fmt_qa_prompt = qa_prompt_str_temp.format(context_str=context_str, query_str=question_temp)
-
-                        chat_text_qa_msgs = [
-                            ChatMessage(
-                                role=MessageRole.SYSTEM,
-                                content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
-                                        "You do not give any kind of information out of the document given by the user.\n"
-                            ),
-                            ChatMessage(
-                                role=MessageRole.USER,
-                                content=fmt_qa_prompt
-                            ),
-                        ]
-                        text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
-
-                        # Query the index using the formatted prompt
-                        result = temp_index.as_query_engine(text_qa_template=text_qa_template, llm=llm).query(question_temp)
-
-                        # Display the result
-                        st.write(result.response)
-                    else:
-                        st.warning(P_QUESTION)
+              
         user_page()
 
     elif tabs == "**Admin**":
@@ -290,14 +235,7 @@ def admin_page():
 
 
 
-def callback():
-    if st.session_state.STT_output:
-        st.session_state["temp_question"] = st.session_state.STT_output
-
-
-if 'text_received' not in st.session_state:
-
-    st.session_state.text_received =[]                 
+               
 
 def admin_operations(collection_name, db_path):
 
@@ -330,7 +268,7 @@ def admin_operations(collection_name, db_path):
                     st.session_state.doc_name_to_id[doc_name] = []
                 st.session_state.doc_name_to_id[doc_name].append(doc_id)  # Append all IDs
         st.session_state.doc_list = list(st.session_state.doc_name_to_id.keys())
-        st.selectbox("Documents", st.session_state.doc_list, key="doc_select") 
+        st.selectbox("**Documents**", st.session_state.doc_list, key="doc_select") 
 
     if "show_uploader" not in st.session_state:
         st.session_state.show_uploader = False       
@@ -340,16 +278,17 @@ def admin_operations(collection_name, db_path):
     if st.session_state.show_uploader:
         
         # Define options without Markdown syntax
-        parser_options = ['LlamaParse', 'Unstructured.io']
+        parser_options = ['LlamaParse','Unstructured.io']
 
         # Create a selectbox for parser choice
-        parser_choice = st.selectbox("Choose a parser:", parser_options)
+        parser_choice = st.selectbox("**Choose a parser:**", parser_options)
 
         # Display the selected parser in bold
         st.markdown(f"**Selected Parser:** {parser_choice}")
         # File upload for adding documents
 
         files = st.file_uploader("**Choose PDF files**", key="admin_upload", accept_multiple_files=True)
+        # files=st.file_uploader("**Choose your files**", type=["pdf", "csv", "xlsx", "docx", "pptx"], accept_multiple_files=True)
 
 
         if files and st.button("**Add Document**"):
@@ -447,7 +386,7 @@ def admin_operations(collection_name, db_path):
                 st.session_state.doc_name_to_id[base_file_name].extend(chunk_ids)  # Store all chunk IDs under the base file name
                 st.session_state.doc_list.append(base_file_name)  # Store only the base file name
 
-            st.success("Documents added successfully!")
+            st.success("**Documents added successfully!**")
             st.session_state.show_uploader = False
 
     # Deletion of documents
@@ -461,9 +400,9 @@ def admin_operations(collection_name, db_path):
         # Ensure the document list is populated
 
         if not st.session_state.doc_list:
-            st.warning("No documents available to delete.")
+            st.warning("**No documents available to delete.**")
         else:
-            selected_doc_to_delete = st.selectbox("Select Document to Delete", st.session_state.doc_list, key="doc_delete_select")
+            selected_doc_to_delete = st.selectbox("**Select Document to Delete**", st.session_state.doc_list, key="doc_delete_select")
             # print("Selected document for deletion:", selected_doc_to_delete)
             
             if st.button("**Confirm Delete**"):
@@ -509,7 +448,7 @@ def admin_operations(collection_name, db_path):
                     else:
                         st.warning(f"No chunks found for document '{selected_doc_to_delete}'.")
                 else:
-                    st.warning("No document selected for deletion.")
+                    st.warning("**No document selected for deletion.**")
             
 
 def user_page():
@@ -594,197 +533,274 @@ def show_documents(collection, key_prefix):
 def query_page(collection_name, db_path, admin):
     llm = Settings.llm
     embed_model = Settings.embed_model
-
     # Initialize Chroma collection
     collection = init_chroma_collection(db_path, collection_name)
-    # show_documents(collection, key_prefix="key_prefix")
-        
-
-    # # Initialize chat history and input mode
-    # if "message" not in st.session_state:
-    #     st.session_state.message = []
-    # if "input_mode" not in st.session_state:
-    #     st.session_state.input_mode = "Text"
-    # if "voice_question" not in st.session_state:
-    #     st.session_state.voice_question = ""
-
-    # # Function to reset chat
-    # def reset_chat():
-    #     st.session_state.message = []
-
-    # # Function to handle input mode switch
-    # def switch_input_mode():
-    #     # Clear the previous question when switching modes
-    #     if st.session_state.input_mode == "Text":
-    #         st.session_state.voice_question = ""
-    #     else:
-    #         st.session_state.text_input = ""
-
-    # # Create columns for buttons
-    # col1, col2 = st.columns([1, 1])  # Adjust the ratio if needed
-
-    # # Place buttons in columns
-    # with col1:
-    #     show_documents(collection, key_prefix="key_prefix")
-
-    # with col2:
-    #     if st.button("Reset Chat"):
-    #         reset_chat()
-
-    # # Option to select between text input or voice input
-    # input_option = st.radio("**How would you like to ask your question?**", 
-    #                         ('Text', 'Voice'), 
-    #                         key="input_mode", 
-    #                         on_change=switch_input_mode)
-
-    # if st.session_state.input_mode == 'Text' and input_option=='Text':
-    #     single_question = st.chat_input("Enter your question:", key="text_input")
-
-    # else:
-    #     c1, c2 = st.columns(2)
-    #     with c1:
-    #         st.write("**Convert speech to text:**")
-    #     with c2:
-    #         speech_to_text(language='en', use_container_width=True, just_once=True, key='ST', callback=callback)
-    #     single_question = st.session_state.get("temp_questions", "")
-    #     print(single_question)
-    
-    def callback():
-        if st.session_state.STT_output:
-            st.session_state["temp_question"] = st.session_state.STT_output
-    # Initialize chat history
-    if "message" not in st.session_state:
-        st.session_state.message= []
-
-    # Function to reset chat
-    def reset_chat():
-        st.session_state.message = []
-
-    # Create columns for buttons
-    col1, col2 = st.columns([1, 1])  # Adjust the ratio if needed
-
-    # Place buttons in columns
-    with col1:
-        show_documents(collection, key_prefix="key_prefix")
-
-    with col2:
-        if st.button("Reset Chat"):
-            reset_chat()
-
-    # Option to select between text input or voice input
-    input_option = st.radio("**How would you like to ask your question?**", ('**Text**', '**Voice**'),key="kk")
-
-    if input_option == '**Text**':
-        single_question = st.chat_input("Enter your question:")
-
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("**Convert speech to text:**")
-        with c2:
-            speech_to_text(language='en', use_container_width=True, just_once=True, key='STT', callback=callback)
-            single_question = st.session_state.get("temp_question", "")
+    if "temp_index" in st.session_state and st.session_state.temp_index :
+                def callback():
+                    if st.session_state.STT_output:
+                        st.session_state["temp_question"] = st.session_state.STT_output
 
 
+                # if 'text_received' not in st.session_state:
 
-    # Display chat messages from history on app rerun
-    for mes in st.session_state.message:
-        with st.chat_message(mes["role"]):
-            st.markdown(mes["content"])
+                #    st.session_state.text_received =[]  
+                # Retrieve the index from session state
+                temp_index = st.session_state.temp_index
 
-    if single_question:
-        st.chat_message("user").markdown(single_question)
-        st.session_state.message.append({"role": "user", "content": single_question})
+                # Set up a prompt template for the question-answering task
+                qa_prompt_str_temp = (
+                    "Context information is below.\n"
+                    "---------------------\n"
+                    "{context_str}\n"
+                    "---------------------\n"
+                    "Given the context information and not prior knowledge, "
+                    "answer the question: {query_str}\n"
+                )
 
-        # Process the single question if provided
-        if 'documents' in collection.get() and len(collection.get()['documents']) > 0:
-            vector_store = ChromaVectorStore(chroma_collection=collection)
-            docstore = SimpleDocumentStore.from_persist_path(f"./docstore_{collection_name}.json")
-            storage_context = StorageContext.from_defaults(docstore=docstore, vector_store=vector_store)
-            vector_index = VectorStoreIndex(nodes=[], storage_context=storage_context, embed_model=embed_model)
+                # Set up a retriever to get relevant nodes
+                retriever = temp_index.as_retriever(similarity_top_k=3)
+                # Initialize chat history
+                if "message" not in st.session_state:
+                    st.session_state.message= []
 
-            # Create the BM25 retriever
-            bm25_retriever = BM25Retriever.from_defaults(docstore=docstore, similarity_top_k=2)
+                
+                # Store the previous response
+                if "previous_response" not in st.session_state:
+                    st.session_state.previous_response = ""    
 
-            # Function to perform hybrid retrieval
-            def hybrid_retrieve(query, alpha=0.5):
-                # Get results from BM25
-                bm25_results = bm25_retriever.retrieve(query)
-                # Get results from the vector store
-                vector_results = vector_index.as_retriever(similarity_top_k=2).retrieve(query)
+                # Function to reset chat
+                def reset_chat():
+                    st.session_state.message = []
+                    st.session_state.previous_response = ""
 
-                # Combine results with weighting
-                combined_results = {}
-                # Weight BM25 results
-                for result in bm25_results:
-                    combined_results[result.id_] = combined_results.get(result.id_, 0) + (1 - alpha)
-                # Weight vector results
-                for result in vector_results:
-                    combined_results[result.id_] = combined_results.get(result.id_, 0) + alpha
+                
+                if st.button("Reset Chat"):
+                        reset_chat()
 
-                # Sort results based on the combined score
-                sorted_results = sorted(combined_results.items(), key=lambda x: x[1], reverse=True)
-                # Return the top N results
-                return [docstore.get_document(doc_id) for doc_id, _ in sorted_results[:4]]
+                # Option to select between text input or voice input
+                input_option = st.radio("**How would you like to ask your question?**", ('**Text**', '**Voice**'),key="kk")
 
-            # Set up a prompt template for the question-answering task
-            qa_prompt_str = (
-                "Context information is below.\n"
-                "---------------------\n"
-                "{context_str}\n"
-                "---------------------\n"
-                "Given the context information and not prior knowledge, "
-                "answer the question: {query_str}\n"
-            )
+                if input_option == '**Text**':
+                    temp_questions = st.chat_input("Enter your question:")
 
-            alpha = 0.7  # Adjust alpha as needed
-            retrieved_nodes = hybrid_retrieve(single_question, alpha)
-
-            context_str = "\n\n".join([r.get_content()[:4000] for r in retrieved_nodes])
-            fmt_qa_prompt = qa_prompt_str.format(context_str=context_str, query_str=single_question)
-
-            chat_text_qa_msgs = [
-                ChatMessage(
-                    role=MessageRole.SYSTEM,
-                    content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
-                            "You do not give any kind of information out of the document given by user.\n"
-                ),
-                ChatMessage(
-                    role=MessageRole.USER,
-                    content=fmt_qa_prompt
-                ),
-            ]
-            text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
-            query_engine = vector_index.as_query_engine(
-                text_qa_template=text_qa_template,
-                llm=llm,
-            )
-            response = query_engine.query(single_question)
-
-            # Citation query
-            query_engine = CitationQueryEngine.from_args(
-                vector_index,
-                citation_chunk_size=1024,
-                similarity_top_k=3
-            )
-            citation = query_engine.query(single_question)
-
-            if "out of context" in str(response.response).lower():
-                source = "NO METADATA"
-            else:
-                metadata = citation.metadata
-                for key, value in metadata.items():
-                    if "source" in value:
-                        source = value["source"]
-                        break
                 else:
-                    source = "Source not found in metadata."
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.write("**Convert speech to text:**")
+                    with c2:
+                        speech_to_text(language='en', use_container_width=True, just_once=True, key='STT', callback=callback)
+                        temp_questions = st.session_state.get("temp_question", "")
+
+
+
+                # Display chat messages from history on app rerun
+                for mes in st.session_state.message:
+                    with st.chat_message(mes["role"]):
+                        st.markdown(mes["content"])
+
+                if temp_questions:
+                    st.chat_message("user").markdown(temp_questions)
+                    st.session_state.message.append({"role": "user", "content": temp_questions})
+
+                
+                    if temp_questions:
+                        # Retrieve nodes relevant to the question
+                        retrieved_nodes = retriever.retrieve(temp_questions)
+                        context_str = "\n\n".join([r.get_content().replace('{', '').replace('{','')[:4000] for r in retrieved_nodes])
+
+                        # Append the previous response to the context
+                        if st.session_state.previous_response:
+                             context_str = f"{context_str}\n\nPrevious Response: {st.session_state.previous_response}"
+                        # Format the QA prompt
+                        fmt_qa_prompt = qa_prompt_str_temp.format(context_str=context_str, query_str=temp_questions)
+
+                        chat_text_qa_msgs = [
+                            ChatMessage(
+                                role=MessageRole.SYSTEM,
+                                content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
+                                        "You do not give any kind of information out of the document given by the user.\n"
+                            ),
+                            ChatMessage(
+                                role=MessageRole.USER,
+                                content=fmt_qa_prompt
+                            ),
+                        ]
+                        text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
+
+                        # Query the index using the formatted prompt
+                        result = temp_index.as_query_engine(text_qa_template=text_qa_template, llm=llm).query(temp_questions)
+
+                        # Display the result
+                        formatted_response = textwrap.fill(result.response, width=150)  # Adjust the width as needed
+
+                        # Display the response for the single question
+                        with st.chat_message("assistant"):
+                            st.code(f"{formatted_response}", language='python')
+
+                        st.session_state.message.append({"role": "assistant", "content": result.response})
+                        st.session_state.previous_response = result.response  # Save the current response for future use
+
+                        temp_questions=""
+                    else:
+                        st.warning(P_QUESTION)
+
+    else:  
+        def callback():
+            if st.session_state.STT_output:
+                st.session_state["temp_question"] = st.session_state.STT_output
+        # Initialize chat history
+        if "message" not in st.session_state:
+            st.session_state.message= []
+        # Store the previous response
+        if "previous_response" not in st.session_state:
+            st.session_state.previous_response = ""    
+
+        # Function to reset chat
+        def reset_chat():
+            st.session_state.message = []
+            st.session_state.previous_response = ""
+
+
+        # Create columns for buttons
+        col1, col2 = st.columns([1, 1])  # Adjust the ratio if needed
+
+        # Place buttons in columns
+        with col1:
+            show_documents(collection, key_prefix="key_prefix")
+
+        with col2:
+            if st.button("Reset Chat"):
+                reset_chat()
+
+        # Option to select between text input or voice input
+        input_option = st.radio("**How would you like to ask your question?**", ('**Text**', '**Voice**'),key="kk")
+
+        if input_option == '**Text**':
+            single_question = st.chat_input("Enter your question:")
+
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Convert speech to text:**")
+            with c2:
+                speech_to_text(language='en', use_container_width=True, just_once=True, key='STT', callback=callback)
+                single_question = st.session_state.get("temp_question", "")
+
+
+
+        # Display chat messages from history on app rerun
+        for mes in st.session_state.message:
+            with st.chat_message(mes["role"]):
+                st.markdown(mes["content"])
+
+        if single_question:
+            st.chat_message("user").markdown(single_question)
+            st.session_state.message.append({"role": "user", "content": single_question})
+
+            # Process the single question if provided
+            if 'documents' in collection.get() and len(collection.get()['documents']) > 0:
+                vector_store = ChromaVectorStore(chroma_collection=collection)
+                docstore = SimpleDocumentStore.from_persist_path(f"./docstore_{collection_name}.json")
+                storage_context = StorageContext.from_defaults(docstore=docstore, vector_store=vector_store)
+                vector_index = VectorStoreIndex(nodes=[], storage_context=storage_context, embed_model=embed_model)
+
+                # Create the BM25 retriever
+                bm25_retriever = BM25Retriever.from_defaults(docstore=docstore, similarity_top_k=2)
+
+                # Function to perform hybrid retrieval
+                def hybrid_retrieve(query, alpha=0.5):
+                    # Get results from BM25
+                    bm25_results = bm25_retriever.retrieve(query)
+                    # Get results from the vector store
+                    vector_results = vector_index.as_retriever(similarity_top_k=2).retrieve(query)
+
+                    # Combine results with weighting
+                    combined_results = {}
+                    # Weight BM25 results
+                    for result in bm25_results:
+                        combined_results[result.id_] = combined_results.get(result.id_, 0) + (1 - alpha)
+                    # Weight vector results
+                    for result in vector_results:
+                        combined_results[result.id_] = combined_results.get(result.id_, 0) + alpha
+
+                    # Sort results based on the combined score
+                    sorted_results = sorted(combined_results.items(), key=lambda x: x[1], reverse=True)
+                    # Return the top N results
+                    return [docstore.get_document(doc_id) for doc_id, _ in sorted_results[:4]]
+
+                # Set up a prompt template for the question-answering task
+                qa_prompt_str = (
+                    "Context information is below.\n"
+                    "---------------------\n"
+                    "{context_str}\n"
+                    "---------------------\n"
+                    "Given the context information and not prior knowledge, "
+                    "answer the question: {query_str}\n"
+                )
+                alpha = 0.7  # Adjust alpha as needed
+                retrieved_nodes = hybrid_retrieve(single_question, alpha)
+
+                # context_str = "\n\n".join([r.get_content()[:4000] for r in retrieved_nodes])
+                context_str = "\n\n".join([r.get_content().replace('{', '').replace('{','')[:4000] for r in retrieved_nodes])
+
+                # Append the previous response to the context
+                if st.session_state.previous_response:
+                    context_str = f"{context_str}\n\nPrevious Response: {st.session_state.previous_response}"
+                fmt_qa_prompt = qa_prompt_str.format(context_str=context_str, query_str=single_question)
+                print("The final",fmt_qa_prompt)
+                chat_text_qa_msgs = [
+                    ChatMessage(
+                        role=MessageRole.SYSTEM,
+                        content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
+                                "You do not give any kind of information out of the document given by user.\n"
+                    ),
+                    ChatMessage(
+                        role=MessageRole.USER,
+                        content=fmt_qa_prompt
+                    )
+                ]
+                                
+                # Debug: Inspect chat_text_qa_msgs
+                for msg in chat_text_qa_msgs:
+                    print(f"Role: {msg.role}, Content: {msg.content}")
+                text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
+                print("issue",text_qa_template)
+                query_engine = vector_index.as_query_engine(
+                    text_qa_template=text_qa_template,
+                    llm=llm,
+                )
+                response = query_engine.query(single_question)
+
+                # Citation query
+                query_engine = CitationQueryEngine.from_args(
+                    vector_index,
+                    citation_chunk_size=1024,
+                    similarity_top_k=3
+                )
+                citation = query_engine.query(single_question)
+
+                if "out of context" in str(response.response).lower():
+                    source = "NO METADATA"
+                else:
+                    metadata = citation.metadata
+                    for key, value in metadata.items():
+                        if "source" in value:
+                            source = value["source"]
+                            break
+                    else:
+                        source = "Source not found in metadata."
             
-            # Display the response for the single question
-            st.chat_message("assistant").markdown(f"{response.response}"+"  "+f"{source}")
-            st.session_state.message.append({"role": "assistant", "content": response.response})
-            append_to_csv(collection_name, single_question, context_str, str(response), str(metadata))
-            single_question=""
+                formatted_response = textwrap.fill(response.response, width=150)  # Adjust the width as needed
+
+                # Display the response for the single question
+                with st.chat_message("assistant"):
+                    st.code(f"{formatted_response},  Source:,{source}", language='python')
+
+                st.session_state.message.append({"role": "assistant", "content": response.response})
+                st.session_state.previous_response = response.response  # Save the current response for future use
+
+                append_to_csv(collection_name, single_question, context_str, str(response), str(metadata))
+                single_question=""
 
 
     
@@ -829,14 +845,26 @@ def use_llamaparse(file_content, file_name):
     return res
 
 def use_unstructured(file_content, file_name):
+    # with open(file_name, "wb") as f:
+    #     f.write(file_content)
+    
+    # elements = partition_pdf(file_name)
+    
+    # os.remove(file_name)
+    
+    # return "\n\n".join([str(el) for el in elements])
     with open(file_name, "wb") as f:
         f.write(file_content)
     
-    elements = partition_pdf(file_name)
+    parser = LlamaParse(result_type='text', verbose=True, language="en", num_workers=2)
+    documents = parser.load_data([file_name])
     
     os.remove(file_name)
     
-    return "\n\n".join([str(el) for el in elements])
+    res = ''
+    for i in documents:
+        res += i.text + " "
+    return res
 
 
 if __name__ == "__main__":
