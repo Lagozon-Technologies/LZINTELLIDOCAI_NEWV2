@@ -15,10 +15,10 @@
 # 06             30-Aug-2024   Satya          Addition of unstructured.io and conversatinal chat with new UI
 # ********************************************************************************************** #
 
-#Added by Aruna for chromaDB SQLite version error
-# __import__('pysqlite3')
-# import sys
-# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+Added by Aruna for chromaDB SQLite version error
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import streamlit as st
 import os
