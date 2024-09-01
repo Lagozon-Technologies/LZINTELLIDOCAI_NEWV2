@@ -1,6 +1,6 @@
-#!/bin/bash
+##!/bin/bash
 
-set -e  # Exit immediately if a command exits with a non-zero status
+#set -e  # Exit immediately if a command exits with a non-zero status
 
 # Create a directory in /home for custom installations
 #mkdir -p /home/site/custom
@@ -22,9 +22,9 @@ set -e  # Exit immediately if a command exits with a non-zero status
 # }
 
 # Function to check if a Python package is installed
-python_package_installed() {
-    pip show --user "$1" >/dev/null 2>&1
-}
+# python_package_installed() {
+#     pip show --user "$1" >/dev/null 2>&1
+# }
 
 # Check if dpkg is available, if not, try to install it
 # if ! command_exists dpkg; then
@@ -40,25 +40,25 @@ python_package_installed() {
 # fi
 
 # Update package lists
-apt-get update
+# apt-get update
 
-# List of required system packages
-packages=(
-    "libmagic-dev"
-	"poppler-utils"
-	"tesseract-ocr"
-	"libreoffice"
-)
+# # List of required system packages
+# packages=(
+#     "libmagic-dev"
+# 	"poppler-utils"
+# 	"tesseract-ocr"
+# 	"libreoffice"
+# )
 
 # Install system packages if not already installed
-for package in "${packages[@]}"; do
-    if ! package_installed "$package"; then
-        echo "Installing $package..."
-        apt-get install -y "$package"
-    else
-        echo "$package is already installed."
-    fi
-done
+# for package in "${packages[@]}"; do
+#     if ! package_installed "$package"; then
+#         echo "Installing $package..."
+#         apt-get install -y "$package"
+#     else
+#         echo "$package is already installed."
+#     fi
+# done
 
 # Set up a persistent location for Python packages
 # export PYTHONUSERBASE=/home/site/pythonpackages
