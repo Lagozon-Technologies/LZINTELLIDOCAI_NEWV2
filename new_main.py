@@ -13,9 +13,13 @@
 # 04             17-Aug-2024   Satya          Hybrid Retriver 
 # 05             22-Aug-2024   Satya          Addition of more department and role with change in font
 # 06             30-Aug-2024   Satya          Addition of unstructured.io and conversatinal chat with new UI
+# 07             05-Sept-2024  Satya          Openai embedding and model with improved metadata extraction
+# 08             09-sept-2024  Satya          multiple question implemented with fixed bugs
+# 09             15-sept-2024  Satya          New prompts with gpt-4o-mini 
+# 10             20-sept-2024  Satya          Progress bar with numerical parameter in config file
 # ********************************************************************************************** #
 
-# Added by Aruna for chromaDB SQLite version error
+#Added by Aruna for chromaDB SQLite version error
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -26,9 +30,7 @@ import chromadb
 from llama_index.core import VectorStoreIndex
 from llama_index.core import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.retrievers.bm25 import BM25Retriever
-from llama_index.llms.huggingface import HuggingFaceInferenceAPI
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.prompts import ChatPromptTemplate
 from llama_parse import LlamaParse
@@ -42,23 +44,33 @@ from llama_index.core import Settings
 from dotenv import load_dotenv
 from llama_index.core.storage.docstore import SimpleDocumentStore
 import json
-from unstructured.partition.pdf import partition_pdf
+from llama_index.core.vector_stores import VectorStoreQuery
+
 from streamlit_mic_recorder import speech_to_text
 from datetime import datetime
+from unstructured_ingest.v2.pipeline.pipeline import Pipeline
+from unstructured_ingest.v2.interfaces import ProcessorConfig
+from unstructured_ingest.v2.processes.connectors.local import (
+    LocalIndexerConfig,
+    LocalDownloaderConfig,
+    LocalConnectionConfig,
+    LocalUploaderConfig
+)
+from unstructured_ingest.v2.processes.partitioner import PartitionerConfig
+
 import pandas as pd
 import openai
-
+import shutil
+import time
 import textwrap
 
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 load_dotenv()
 
 LLAMA_API_KEY = os.getenv("LLAMA_API_KEY")
 os.environ["LLAMA_CLOUD_API_KEY"] = LLAMA_API_KEY
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-MODEL_NAME=os.getenv("MODEL_NAME")
-EMBED_MODEL=os.getenv("EMBED_MODEL")
 TITLE=os.getenv("TITLE")
 ROLE = os.getenv("ROLE").split(',')
 PAGE=os.getenv("PAGE").split(",")
@@ -67,6 +79,7 @@ ASK=os.getenv("ASK")
 UPLOAD_DOC=os.getenv("UPLOAD_DOC")
 E_QUESTION=os.getenv("E_QUESTION")
 SECTION=os.getenv("SECTION").split(",")
+DOCSTORE=os.getenv("DOCSTORE").split(",")
 COLLECTION=os.getenv("COLLECTION").split(",")
 DATABASE=os.getenv("DATABASE").split(",")
 P_QUESTION=os.getenv("P_QUESTION")
@@ -76,19 +89,29 @@ DOC_ADDED=os.getenv("DOC_ADDED")
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 DELETE_DOC=os.getenv("DELETE_DOC")
 C_DELETE=os.getenv("C_DELETE")
+api_key = os.getenv("UNSTRUCTURED_API_KEY")
+api_url = os.getenv("UNSTRUCTURED_API_URL")
+OUTPUT=os.getenv("OUTPUT")
+INPUT=os.getenv("INPUT")
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 DOC_DELETED=os.getenv("DOC_DELETED")
 N_DOC=os.getenv("N_DOC")
 image=os.getenv("image")
 imagess=os.getenv("imagess")
+LLM_MODEL=os.getenv("LLM_MODEL")
+EMBEDDING_MODEL=os.getenv("EMBEDDING_MODEL")
+W=os.getenv("W")
+BM25_TOP=os.getenv("BM25_TOP")
+VEC_TOP=os.getenv("VEC_TOP")
+TEMP_CHUNK_SIZE=os.getenv("TEMP_CHUNK_SIZE")
+CHUNK_SIZE=os.getenv("CHUNK_SIZE")
+CHUNK_OVERLAP=os.getenv("CHUNK_OVERLAP")
+BATCH_SIZE=os.getenv("BATCH_SIZE")
+Settings.llm = OpenAI(model=LLM_MODEL,temperature=0) 
+# Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small", embed_batch_size=100,api_key=OPENAI_API_KEY)
+Settings.embed_model =OpenAIEmbedding(api_key=OPENAI_API_KEY)
 
-
-Settings.llm = HuggingFaceInferenceAPI(model_name=MODEL_NAME, token=HF_TOKEN)
-Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
-# llm = OpenAI(model="gpt-4o")  # Ensure model is set up correctly
-
-#Settings.embed_model =OpenAIEmbedding()
-
+openai_ef = OpenAIEmbeddingFunction(api_key=os.getenv("OPENAI_API_KEY"), model_name=EMBEDDING_MODEL)
 
 # CSV file to store query results
 CSV_FILE_PATH = "record_results.csv"
@@ -165,7 +188,9 @@ def main():
         # Show sidebar in Tab 1
         with st.sidebar:
             st.subheader("**Upload your temporary document**")
-            embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+            # embed_model = OpenAIEmbedding()
+            embed_model =Settings.embed_model
+
             # Define options without Markdown syntax
             parser_options = [ 'LlamaParse','Unstructured.io']
 
@@ -176,29 +201,41 @@ def main():
             st.markdown(f"**Selected Parser:** {parser_temp_choice}")
             uploaded_files = st.file_uploader("**Choose your files**", type=["pdf", "csv", "xlsx", "docx", "pptx"], accept_multiple_files=True)
 
-            # Function to parse files and create the index
-            def initialize_index(uploaded_files, embed_model):
-                temp_documents = []
-                for uploaded_file in uploaded_files:
-                    file_content = uploaded_file.read()
-                    temp_file_name = uploaded_file.name
+            def initialize_index(uploaded_files,embed_model):
+                    temp_documents = []
+                    parsed_text = []
+
+                    # Parse files based on the chosen parser
                     if parser_temp_choice == "LlamaParse":
-                        parsed_text = use_llamaparse(file_content, temp_file_name)
+                        for uploaded_file in uploaded_files:
+                            file_content = uploaded_file.read()
+                            temp_file_name = uploaded_file.name
+                            result_text = use_llamaparse(file_content, temp_file_name)
+                            parsed_text.append(result_text)
                     else:
-                        parsed_text = use_unstructured(file_content, temp_file_name)
+                        for uploaded_file in uploaded_files:
+                            # Save each uploaded file temporarily
+                            temp_file_path = INPUT
+                            with open(temp_file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
 
-                    # Split the parsed text into chunks
-                    chunk_size = 1000  # Set the desired chunk size (e.g., 1000 characters)
-                    chunks = [parsed_text[i:i + chunk_size] for i in range(0, len(parsed_text), chunk_size)]
+                            # Process the PDF and get output
+                            result_text = use_unstructured(temp_file_path,uploaded_file.name)
+                            parsed_text.append(result_text)
 
-                    # Create document objects from each chunk
-                    for chunk in chunks:
-                        document = Document(text=chunk)
-                        temp_documents.append(document)
+                    # Split the parsed text into chunks of 1000 characters
+                    chunk_size = int(TEMP_CHUNK_SIZE)
+                    for text in parsed_text:
+                        # Ensure the text is a string and split it into chunks
+                        text_chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+                        for chunk in text_chunks:
+                            # Create document objects from each chunk
+                            document = Document(text=chunk)
+                            temp_documents.append(document)
 
-                # Create the index from the chunked documents
-                temp_index = VectorStoreIndex.from_documents(temp_documents, embed_model=embed_model)
-                return temp_index
+                    # Create the index from the chunked documents
+                    temp_index = VectorStoreIndex.from_documents(temp_documents,embed_model=embed_model)
+                    return temp_index
 
             
             if uploaded_files:
@@ -296,18 +333,31 @@ def admin_operations(collection_name, db_path):
             for file in files:
                 file_content = file.read()
                 file_name = file.name
+                print("the name of file.....", file_name)
 
                 if parser_choice == "LlamaParse":
                     parsed_text = use_llamaparse(file_content, file_name)
+                    # with open(file_name, 'w', encoding='utf-8') as file:
+
+                    #       file.write(parsed_text)
+
                     #print(parsed_text)
                 else:
-                    parsed_text = use_unstructured(file_content, file_name)
+                    file_path = INPUT
+                    with open(file_path, "wb") as f:
+                        f.write(file.getbuffer())
+                    parsed_text = use_unstructured(file_path,file_name)
                     #print(parsed_text)
 
 
 
-                base_splitter = SentenceSplitter(chunk_size=512)
+                base_splitter = SentenceSplitter(chunk_size=int(CHUNK_SIZE),chunk_overlap=int(CHUNK_OVERLAP))
                 nodes = base_splitter.get_nodes_from_documents([Document(text=parsed_text)])
+                # counter=0
+                # for node in nodes:
+                #     print("The node of the whole doc are :",node.text)
+                #     counter+=1
+                # print("The no of nodes :",counter)    
 
                 # Initialize storage context (by default it's in-memory)
                 storage_context = StorageContext.from_defaults()
@@ -330,18 +380,21 @@ def admin_operations(collection_name, db_path):
 
                     # Store the document in the storage context
                     storage_context.docstore.add_documents([document])
-
                 # Load existing documents from the .json file if it exists
+                for i in range(len(DOCSTORE)):
+                    if collection_name in DOCSTORE[i]:
+                        coll = DOCSTORE[i]
+                        break
                 existing_documents = {}
-                if os.path.exists(f"./docstore_{collection_name}.json"):
-                    with open(f"./docstore_{collection_name}.json", "r") as f:
+                if os.path.exists(coll):
+                    with open(coll, "r") as f:
                         existing_documents = json.load(f)
 
                     # Persist the storage context (if necessary)
-                    storage_context.docstore.persist(f"./docstore_{collection_name}.json")
+                    storage_context.docstore.persist(coll)
 
                     # Load new data from the same file (or another source)
-                    with open(f"./docstore_{collection_name}.json", "r") as f:
+                    with open(coll, "r") as f:
                         st_data = json.load(f)
 
                     # Update existing_documents with st_data
@@ -363,22 +416,43 @@ def admin_operations(collection_name, db_path):
                     final_dict["docstore/data"] = merged_dict
 
                     # Write the updated documents back to the JSON file
-                    with open(f"./docstore_{collection_name}.json", "w") as f:
+                    with open(coll, "w") as f:
                         json.dump(final_dict, f, indent=4)
 
                 else:
                     # Persist the storage context if the file does not exist
-                    storage_context.docstore.persist(f"./docstore_{collection_name}.json")
-                embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+                    storage_context.docstore.persist(coll)
+
+                # embed_model =OpenAIEmbedding()
+                embed_model =Settings.embed_model
+
+
+
                 # Create the vector store index
                 VectorStoreIndex(nodes, storage_context=storage_context, embed_model=embed_model)
 
-                # Add the chunks to the collection
-                collection.add(
-                    documents=[node.text for node in nodes],
-                    metadatas=metadatas,
-                    ids=chunk_ids
-                )
+                # # Add the chunks to the collection
+                # collection.add(
+                #     documents=[node.text for node in nodes],
+                #     metadatas=metadatas,
+                #     ids=chunk_ids
+                # )
+
+                batch_size=int(BATCH_SIZE)
+                for i in range(0, len(nodes), batch_size):
+                    batch_nodes = nodes[i:i + batch_size]
+                    try:
+                        collection.add(
+                            documents=[node.text for node in batch_nodes],
+                            metadatas=metadatas[i:i + batch_size],
+                            ids=chunk_ids[i:i + batch_size]
+                        )
+                        time.sleep(5)  # Add a retry with a delay
+
+                    except :
+                        # Handle rate limit by adding a delay or retry mechanism
+                        print("Rate limit error")
+
 
                 # Update session state
                 if base_file_name not in st.session_state.doc_name_to_id:
@@ -532,7 +606,7 @@ def show_documents(collection, key_prefix):
 
 def query_page(collection_name, db_path, admin):
     llm = Settings.llm
-    embed_model = Settings.embed_model
+    embed_model=Settings.embed_model
     # Initialize Chroma collection
     collection = init_chroma_collection(db_path, collection_name)
     if "temp_index" in st.session_state and st.session_state.temp_index :
@@ -540,21 +614,16 @@ def query_page(collection_name, db_path, admin):
                     if st.session_state.STT_output:
                         st.session_state["temp_question"] = st.session_state.STT_output
 
-
-                # if 'text_received' not in st.session_state:
-
-                #    st.session_state.text_received =[]  
-                # Retrieve the index from session state
                 temp_index = st.session_state.temp_index
 
                 # Set up a prompt template for the question-answering task
                 qa_prompt_str_temp = (
-                    "Context information is below.\n"
-                    "---------------------\n"
-                    "{context_str}\n"
-                    "---------------------\n"
-                    "Given the context information and not prior knowledge, "
-                    "answer the question: {query_str}\n"
+                    '''
+                       User Question: {query_str}/n/n
+                       Document Content: {context_str}/n/n
+                       AI Response: 
+  
+                    '''
                 )
 
                 # Set up a retriever to get relevant nodes
@@ -605,11 +674,11 @@ def query_page(collection_name, db_path, admin):
                 
                     if temp_questions:
                         # Retrieve nodes relevant to the question
-                        retrieved_nodes = retriever.retrieve(temp_questions)
-                        context_str = "\n\n".join([r.get_content().replace('{', '').replace('{','')[:4000] for r in retrieved_nodes])
+                        temp_retrieved_nodes = retriever.retrieve(temp_questions)
+                        context_str = "\n\n".join([r.get_content().replace('{', '').replace('}','')[:4000] for r in temp_retrieved_nodes])
 
                         # Append the previous response to the context
-                        if st.session_state.previous_response:
+                        if st.session_state.previous_response and "This question is outside the provided context." not in st.session_state.previous_response :
                              context_str = f"{context_str}\n\nPrevious Response: {st.session_state.previous_response}"
                         # Format the QA prompt
                         fmt_qa_prompt = qa_prompt_str_temp.format(context_str=context_str, query_str=temp_questions)
@@ -617,8 +686,32 @@ def query_page(collection_name, db_path, admin):
                         chat_text_qa_msgs = [
                             ChatMessage(
                                 role=MessageRole.SYSTEM,
-                                content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
-                                        "You do not give any kind of information out of the document given by the user.\n"
+                                content='''You are an AI assistant specializing in delivering precise, context-aware responses. Follow these guidelines strictly:
+
+                            1. *Contextual Responses Only*: Your answers must be derived exclusively from the provided document chunks. Avoid using any external knowledge or assumptions.
+                            
+                            2. *Out-of-Scope Questions*: If the user's query cannot be answered based on the given content, respond with: "This question is outside the provided context."
+
+                            3. *Clarity and Precision*: Offer clear, concise, and relevant responses. Ensure your answers are directly related to the user's question based on the available context.
+
+                            4. *Engagement*: Keep your tone friendly and engaging while maintaining professionalism and accuracy. Aim for a smooth and interactive user experience.
+
+                            5. *No Speculation*: If information is missing, do not speculate. Stick to the content provided.
+                            
+                            6. *Reason and Check*: Think slowly and carefully. Check your for correctness before output.
+
+                            
+                            ### Sample Examples:
+
+                            *Example 1*:
+                            User Question: "What is the main finding of the report?"
+                            Document Content: "The report concludes that the company's revenue growth has increased by 15% over the last quarter."
+                            AI Response: "The main finding of the report is that the company's revenue growth increased by 15% over the last quarter."
+
+                            *Example 2*:
+                            User Question: "Who is the CEO of the company?"
+                            Document Content: [No information regarding the CEO in the provided content.]
+                            AI Response: "This question is outside the provided context." '''
                             ),
                             ChatMessage(
                                 role=MessageRole.USER,
@@ -629,20 +722,21 @@ def query_page(collection_name, db_path, admin):
 
                         # Query the index using the formatted prompt
                         result = temp_index.as_query_engine(text_qa_template=text_qa_template, llm=llm).query(temp_questions)
+                        if result:
+                                # Display the result
+                                # formatted_response = textwrap.fill(result.response,width=170)  # Adjust the width as needed
+                                formatted_response=result.response
+                                
+                                with st.chat_message("assistant"):
+                                    st.code(f"{formatted_response}", language='None')        
+                                st.session_state.message.append({"role": "assistant", "content": f"{result.response}"})
+                                result.response=result.response.replace('{', '').replace('}','').replace('TP','')
 
-                        # Display the result
-                        formatted_response = textwrap.fill(result.response, width=150)  # Adjust the width as needed
+                                st.session_state.previous_response = result.response  # Save the current response for future use
 
-                        # Display the response for the single question
-                        with st.chat_message("assistant"):
-                            st.code(f"{formatted_response}", language='python')
-
-                        st.session_state.message.append({"role": "assistant", "content": result.response})
-                        st.session_state.previous_response = result.response  # Save the current response for future use
-
-                        temp_questions=""
-                    else:
-                        st.warning(P_QUESTION)
+                                temp_questions=""
+                        else:
+                                st.warning(N_DOC)
 
     else:  
         def callback():
@@ -696,138 +790,176 @@ def query_page(collection_name, db_path, admin):
         if single_question:
             st.chat_message("user").markdown(single_question)
             st.session_state.message.append({"role": "user", "content": single_question})
+            with st.spinner("Generating response..."):
 
-            # Process the single question if provided
-            if 'documents' in collection.get() and len(collection.get()['documents']) > 0:
-                vector_store = ChromaVectorStore(chroma_collection=collection)
-                docstore = SimpleDocumentStore.from_persist_path(f"./docstore_{collection_name}.json")
-                storage_context = StorageContext.from_defaults(docstore=docstore, vector_store=vector_store)
-                vector_index = VectorStoreIndex(nodes=[], storage_context=storage_context, embed_model=embed_model)
+                    # Process the single question if provided
+                    if 'documents' in collection.get() and len(collection.get()['documents']) > 0:
+                        vector_store = ChromaVectorStore(chroma_collection=collection)
+                        docstore = SimpleDocumentStore.from_persist_path(f"./docstore_{collection_name}.json")
+                        storage_context = StorageContext.from_defaults(docstore=docstore, vector_store=vector_store)
+                        vector_index = VectorStoreIndex(nodes=[], storage_context=storage_context, embed_model=embed_model)
 
-                # Create the BM25 retriever
-                bm25_retriever = BM25Retriever.from_defaults(docstore=docstore, similarity_top_k=2)
+                        # Create the BM25 retriever
+                        bm25_retriever = BM25Retriever.from_defaults(docstore=docstore, similarity_top_k=int(BM25_TOP))
 
-                # Function to perform hybrid retrieval
-                def hybrid_retrieve(query, alpha=0.5):
-                    # Get results from BM25
-                    bm25_results = bm25_retriever.retrieve(query)
-                    # Get results from the vector store
-                    vector_results = vector_index.as_retriever(similarity_top_k=2).retrieve(query)
+                        # Function to perform hybrid retrieval
+                        def hybrid_retrieve(query, alpha=0.5):
+                            # Get results from BM25
+                            bm25_results = bm25_retriever.retrieve(query)
 
-                    # Combine results with weighting
-                    combined_results = {}
-                    # Weight BM25 results
-                    for result in bm25_results:
-                        combined_results[result.id_] = combined_results.get(result.id_, 0) + (1 - alpha)
-                    # Weight vector results
-                    for result in vector_results:
-                        combined_results[result.id_] = combined_results.get(result.id_, 0) + alpha
+                            # Get results from the vector store
+                            vector_results = vector_index.as_retriever(similarity_top_k=int(VEC_TOP)).retrieve(query)
 
-                    # Sort results based on the combined score
-                    sorted_results = sorted(combined_results.items(), key=lambda x: x[1], reverse=True)
-                    # Return the top N results
-                    return [docstore.get_document(doc_id) for doc_id, _ in sorted_results[:4]]
+                            # Combine results with weighting
+                            combined_results = {}
+                            # Weight BM25 results
+                            for result in bm25_results:
+                                combined_results[result.id_] = combined_results.get(result.id_, 0) + (1 - alpha)
 
-                # Set up a prompt template for the question-answering task
-                qa_prompt_str = (
-                    "Context information is below.\n"
-                    "---------------------\n"
-                    "{context_str}\n"
-                    "---------------------\n"
-                    "Given the context information and not prior knowledge, "
-                    "answer the question: {query_str}\n"
-                )
-                alpha = 0.7  # Adjust alpha as needed
-                retrieved_nodes = hybrid_retrieve(single_question, alpha)
+                            # Weight vector results
+                            for result in vector_results:
+                                combined_results[result.id_] = combined_results.get(result.id_, 0) + alpha
+                            # Sort results based on the combined score
+                            sorted_results = sorted(combined_results.items(), key=lambda x: x[1], reverse=True)
+                            # Return the top N results
+                            return [docstore.get_document(doc_id) for doc_id, _ in sorted_results]
 
-                # context_str = "\n\n".join([r.get_content()[:4000] for r in retrieved_nodes])
-                context_str = "\n\n".join([r.get_content().replace('{', '').replace('{','')[:4000] for r in retrieved_nodes])
+                        # Set up a prompt template for the question-answering task
+                        # qa_prompt_str = (
+                        #     "Context information is below.\n"
+                        #     "---------------------\n"
+                        #     "{context_str}\n"
+                        #     "---------------------\n"
+                        #     "Given the context information and not prior knowledge, "
+                        #     "answer the question: {query_str}\n"
+                        # )
+                        qa_prompt_str=(
+                            '''
+                            User Question: {query_str}/n/n
+                            Document Content: {context_str}/n/n
+                            AI Response: 
+        
+                            '''
+                        )
+                        alpha = float(W)  # Adjust alpha as needed
+                        retrieved_nodes = hybrid_retrieve(single_question, alpha)
+                        ids = [doc.id_ for doc in retrieved_nodes]
+                        # print(ids)
+                        # context_str = "\n\n".join([r.get_content()[:4000] for r in retrieved_nodes])
+                        context_str = "\n\n".join([r.get_content().replace('{', '').replace('}','')[:4000] for r in retrieved_nodes])
 
-                # Append the previous response to the context
-                if st.session_state.previous_response:
-                    context_str = f"{context_str}\n\nPrevious Response: {st.session_state.previous_response}"
-                fmt_qa_prompt = qa_prompt_str.format(context_str=context_str, query_str=single_question)
-                print("The final",fmt_qa_prompt)
-                chat_text_qa_msgs = [
-                    ChatMessage(
-                        role=MessageRole.SYSTEM,
-                        content="You strictly answer the question from the context of the given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
-                                "You do not give any kind of information out of the document given by user.\n"
-                    ),
-                    ChatMessage(
-                        role=MessageRole.USER,
-                        content=fmt_qa_prompt
-                    )
-                ]
-                                
-                # Debug: Inspect chat_text_qa_msgs
-                for msg in chat_text_qa_msgs:
-                    print(f"Role: {msg.role}, Content: {msg.content}")
-                text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
-                print("issue",text_qa_template)
-                query_engine = vector_index.as_query_engine(
-                    text_qa_template=text_qa_template,
-                    llm=llm,
-                )
-                response = query_engine.query(single_question)
+                        # Append the previous response to the context
+                        if st.session_state.previous_response and "This question is outside the provided context." not in st.session_state.previous_response :
+                            # context_str = f"{context_str}\n\nPrevious Response: {st.session_state.previous_response}"
+                            context_str = f"{context_str}\n\n{st.session_state.previous_response}"
 
-                # Citation query
-                query_engine = CitationQueryEngine.from_args(
-                    vector_index,
-                    citation_chunk_size=1024,
-                    similarity_top_k=3
-                )
-                citation = query_engine.query(single_question)
+                        fmt_qa_prompt = qa_prompt_str.format(context_str=context_str, query_str=single_question)
+                        chat_text_qa_msgs = [
+                            ChatMessage(
+                                role=MessageRole.SYSTEM,
 
-                if "out of context" in str(response.response).lower():
-                    source = "NO METADATA"
-                else:
-                    metadata = citation.metadata
-                    for key, value in metadata.items():
-                        if "source" in value:
-                            source = value["source"]
-                            break
+                            #       content='''You are an AI language model designed to provide precise and contextually relevant responses. Adhere strictly to the following instructions:
+                            #                 Contextual Responses Only: Answer questions solely based on the content provided. Do not incorporate any external information or knowledge.
+                            #                 Out of Context Handling: If a question falls outside the scope of the provided content, respond with "OUT OF CONTEXT QUESTION."
+                            #                 Clarity and Precision: Ensure that your answers are clear, concise, and directly address the user's inquiries based on the context given.
+                            #                 Engagement: While maintaining accuracy, aim to keep the tone positive and engaging to enhance user interaction.'''      
+                            
+                                    content='''You are an AI assistant specializing in delivering precise, context-aware responses. Follow these guidelines strictly:
+
+                                    1. *Contextual Responses Only*: Your answers must be derived exclusively from the provided document chunks. Avoid using any external knowledge or assumptions.
+                                    
+                                    2. *Out-of-Scope Questions*: If the user's query cannot be answered based on the given content, respond with: "This question is outside the provided context."
+
+                                    3. *Clarity and Precision*: Offer clear, concise, and relevant responses. Ensure your answers are directly related to the user's question based on the available context.
+
+                                    4. *Engagement*: Keep your tone friendly and engaging while maintaining professionalism and accuracy. Aim for a smooth and interactive user experience.
+
+                                    5. *No Speculation*: If information is missing, do not speculate. Stick to the content provided.
+                                    
+                                    6. *Reason and Check*: Think slowly and carefully. Check your for correctness before output.
+
+                                    
+                                    ### Sample Examples:
+
+                                    *Example 1*:
+                                    User Question: "What is the main finding of the report?"
+                                    Document Content: "The report concludes that the company's revenue growth has increased by 15% over the last quarter."
+                                    AI Response: "The main finding of the report is that the company's revenue growth increased by 15% over the last quarter."
+
+                                    *Example 2*:
+                                    User Question: "Who is the CEO of the company?"
+                                    Document Content: [No information regarding the CEO in the provided content.]
+                                    AI Response: "This question is outside the provided context."
+
+                                    '''
+
+                            ),
+
+                            ChatMessage(
+                                role=MessageRole.USER,
+                                content=fmt_qa_prompt
+                            )
+                        ]
+                                        
+                        text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
+
+                        query_engine = vector_index.as_query_engine(
+                            text_qa_template=text_qa_template,
+                            llm=llm,
+                        )
+
+                        response = query_engine.query(single_question)
+                        if "out of context" in str(response.response).lower():
+                            source = "NO METADATA"
+                        else:  
+                            source=" "  
+                            # # Function to remove the part after the last underscore
+                            # def remove_suffix(id_):
+                            #     return id_.rsplit('_', 1)[0]  # Split from the right and take the first part
+
+                            # # Create a new list with the modified IDs
+                            # modified_ids = [remove_suffix(id_) for id_ in ids]
+                            # if len(set(modified_ids)) == 1:
+                            #     source=modified_ids[0]
+                            # else:
+                            #     source = " and ".join(modified_ids)
+                            source = " and ".join(ids)  # Join the original IDs with " and "
+
+
+                        # formatted_response = textwrap.fill(result.response,width=170)  # Adjust the width as needed
+                        formatted_response=response.response
+
+
+                        # Display the response for the single question
+                        with st.chat_message("assistant"):
+                                # with st.spinner("Generating response..."):
+                                #     # Simulate a delay for demonstration purposes
+                                #     time.sleep(2)  # Replace this with actual processing logic
+
+
+                                    st.code(f"{formatted_response} --- Source:{source}", language='None')
+
+                                    append_to_csv(collection_name, single_question, context_str, str(response.response), str(source))
+
+
+                        
+
+                                    st.session_state.message.append({"role": "assistant","content": f"{response.response} --- Source: {source}"})
+                                    response.response=response.response.replace('{', '').replace('}','').replace('TP','')
+                                    st.session_state.previous_response = response.response  # Save the current response for future use
+
+                                    # append_to_csv(collection_name, single_question, context_str, str(response.response), str(source))
+                                    single_question=""
+
                     else:
-                        source = "Source not found in metadata."
-            
-                formatted_response = textwrap.fill(response.response, width=150)  # Adjust the width as needed
-
-                # Display the response for the single question
-                with st.chat_message("assistant"):
-                    st.code(f"{formatted_response},  Source:,{source}", language='python')
-
-                st.session_state.message.append({"role": "assistant", "content": response.response})
-                st.session_state.previous_response = response.response  # Save the current response for future use
-
-                append_to_csv(collection_name, single_question, context_str, str(response), str(metadata))
-                single_question=""
-
-
+                        st.warning(N_DOC)
     
 
 
 def init_chroma_collection(db_path, collection_name):
     db = chromadb.PersistentClient(path=db_path)
-    return db.get_or_create_collection(collection_name)
+    return db.get_or_create_collection(collection_name,embedding_function=openai_ef)
 
-def query_index(index, question, qa_prompt_str, llm):
-    chat_text_qa_msgs = [
-        ChatMessage(
-            role=MessageRole.SYSTEM,
-            content="You strictly answer the question from the context of given document only and if you do not know just say 'OUT OF CONTEXT QUESTION'.\n"
-                    "You do not give any kind of information out of the document given by user. \n"
-        ),
-        ChatMessage(
-            role=MessageRole.USER, 
-            content=qa_prompt_str),
-    ]
-    text_qa_template = ChatPromptTemplate(chat_text_qa_msgs)
-    
-    result = index.as_query_engine(
-        text_qa_template=text_qa_template,
-        llm=llm,
-    ).query(question)
-    return result
 
 
 def use_llamaparse(file_content, file_name):
@@ -844,28 +976,61 @@ def use_llamaparse(file_content, file_name):
         res += i.text + " "
     return res
 
-def use_unstructured(file_content, file_name):
-    # with open(file_name, "wb") as f:
-    #     f.write(file_content)
-    
-    # elements = partition_pdf(file_name)
-    
-    # os.remove(file_name)
-    
-    # return "\n\n".join([str(el) for el in elements])
-    with open(file_name, "wb") as f:
-        f.write(file_content)
-    
-    parser = LlamaParse(result_type='text', verbose=True, language="en", num_workers=2)
-    documents = parser.load_data([file_name])
-    
-    os.remove(file_name)
-    
-    res = ''
-    for i in documents:
-        res += i.text + " "
-    return res
 
+def use_unstructured(uploaded_file_path,file_name):
+    
+    # Configure the pipeline
+    pipeline = Pipeline.from_configs(
+        context=ProcessorConfig(),
+        indexer_config=LocalIndexerConfig(input_path=uploaded_file_path),  # Use the uploaded file path
+
+        downloader_config=LocalDownloaderConfig(),
+        source_connection_config=LocalConnectionConfig(),
+        partitioner_config=PartitionerConfig(
+            partition_by_api=True,
+            api_key=api_key,
+            partition_endpoint=api_url,
+            strategy="hi_res",
+        ),
+        uploader_config=LocalUploaderConfig(output_dir=OUTPUT)  # Specify the output directory
+    )
+
+    # Run the pipeline
+    pipeline.run()
+
+    # Find all JSON output files in the "output" folder
+    output_dir = OUTPUT
+    json_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
+
+    concatenated_text = ""
+
+    if json_files:
+        # Loop through each JSON file and extract its contents
+        for json_file in json_files:
+            output_file_path = os.path.join(output_dir, json_file)
+            with open(output_file_path, "r") as f:
+                output_data = json.load(f)
+
+            # Extract text for each element_id
+            for item in output_data:  # Assuming output_data is a list of dictionaries
+                text = item.get("text", "")
+                
+                # Concatenate the text if it's not empty
+                if text:
+                    concatenated_text += text + " "  # Add a space between texts
+
+    else:
+        return "No JSON output found in the 'output' folder."
+    
+
+    os.remove(uploaded_file_path)
+     # Remove the output folder after processing
+    if os.path.exists(OUTPUT):
+        shutil.rmtree(OUTPUT)  # This will delete the output folder and all its contents
+    
+    return concatenated_text.strip()  # Return the concatenated text without trailing spaces
+
+    
 
 if __name__ == "__main__":
     main()
